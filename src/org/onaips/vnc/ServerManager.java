@@ -6,13 +6,21 @@ import java.io.OutputStream;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.InetAddress;
+import java.net.NetworkInterface;
+import java.net.SocketException;
+import java.util.Enumeration;
+import java.util.Set;
+
+import org.apache.http.conn.util.InetAddressUtils;
 
 import android.app.Notification;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.app.Service;
+import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.os.Binder;
 import android.os.Handler;
@@ -25,6 +33,9 @@ import android.util.Log;
 import android.widget.Toast;
 
 public class ServerManager extends Service {
+	
+	public static final String EXTRA_FORCE_START_SERVER_KEY = "force_start_server";
+	
 	SharedPreferences preferences;
 	private static PowerManager.WakeLock wakeLock = null;
 
@@ -35,6 +46,8 @@ public class ServerManager extends Service {
 	private String rHost = null;
 	private final IBinder mBinder = new MyBinder();
 	private Handler handler;
+	
+	private VncBroadcastReceiver mVncBroadcastReceiver = new VncBroadcastReceiver();
 
 	@Override
 	public void onCreate() {
@@ -43,6 +56,8 @@ public class ServerManager extends Service {
 		handler = new Handler(Looper.getMainLooper());
 		preferences = PreferenceManager.getDefaultSharedPreferences(this);
 
+		registerVncReceiver();
+		
 		if (serverConnection != null) {
 			log("ServerConnection was already active!");
 		} else {
@@ -53,23 +68,46 @@ public class ServerManager extends Service {
 
 	}
 
+	private void registerVncReceiver() {
+		IntentFilter intentFilter = new IntentFilter(
+				RemoteControlConstants.ACTION_REQUEST);
+		intentFilter.addCategory(RemoteControlConstants.CATEGORY_SERVER_STATUS);
+		intentFilter.addCategory(RemoteControlConstants.CATEGORY_IP_ADDRESS);
+		intentFilter.addCategory(RemoteControlConstants.CATEGORY_STOP_SERVER);
 
+		this.registerReceiver(mVncBroadcastReceiver, intentFilter,
+				RemoteControlConstants.PERMISSION_REMOTE_CONTROL, null);
+	}
+
+	private void unregisterVncReceiver() {
+		this.unregisterReceiver(mVncBroadcastReceiver);
+	}
 
 	@Override
 	public int onStartCommand(Intent intent, int flags, int startId) {
 
-		log("onStartCommand(Intent intent, int flags, int startId) {");
-
-		Boolean startdaemon = preferences.getBoolean("startdaemononboot",
-				false);
-		log("Let me see if we need to start daemon..."
-				+ (startdaemon ? "Yes" : "No"));
-		if (startdaemon)
-			startServer();
-
-		return super.onStartCommand(intent, flags, startId);
+		boolean forceStartServer = intent.getBooleanExtra(
+				EXTRA_FORCE_START_SERVER_KEY, false);
+		handleStart(forceStartServer);
+		return START_NOT_STICKY;
 	}
 
+	private void handleStart(boolean forceStartServer) {
+		log("ServerManager::handleStart");
+
+		if (forceStartServer) {
+			log("ServerManager: force start server");
+			startServer();
+		} else {
+			Boolean startdaemon = preferences.getBoolean("startdaemononboot",
+					false);
+			log("Let me see if we need to start daemon..."
+					+ (startdaemon ? "Yes" : "No"));
+			if (startdaemon)
+				startServer();
+		}
+	}
+	
 	public void startServer() {
 		// Lets see if i need to boot daemon...
 		try {
@@ -144,11 +182,17 @@ public class ServerManager extends Service {
 			log("Starting " + getFilesDir().getAbsolutePath()
 					+ "/androidvncserver " + " " + rotation + " "
 					+ scaling_string + " " + port_string + " " + display_method);
-
+			RemoteControlBroadcaster.sendServiceStartedBroadcast(this);
 		} catch (IOException e) {
-			log("startServer():" + e.getMessage());
+			String errorDescription = "startServer(): " + e.getMessage();
+			log(errorDescription);
+			RemoteControlBroadcaster.sendServiceNotStartedBroadcast(this,
+					errorDescription);
 		} catch (Exception e) {
-			log("startServer():" + e.getMessage());
+			String errorDescription = "startServer(): " + e.getMessage();
+			log(errorDescription);
+			RemoteControlBroadcaster.sendServiceNotStartedBroadcast(this,
+					errorDescription);
 		}
 
 	}
@@ -158,7 +202,7 @@ public class ServerManager extends Service {
 			rHost = host;
 
 			if (isServerRunning()) {
-				killServer();
+				killServer(this);
 				Thread.sleep(2000);
 			}
 
@@ -170,7 +214,7 @@ public class ServerManager extends Service {
 		}
 	}
 
-	void killServer() {
+	public static void killServer(Context context) {
 		try {
 			DatagramSocket clientSocket = new DatagramSocket();
 			InetAddress addr = InetAddress.getLocalHost();
@@ -180,8 +224,9 @@ public class ServerManager extends Service {
 			DatagramPacket question = new DatagramPacket(buffer, buffer.length,
 					addr, 13132);
 			clientSocket.send(question);
+			RemoteControlBroadcaster.sendServiceStoppedBroadcast(context);
 		} catch (Exception e) {
-
+			RemoteControlBroadcaster.sendServiceNotStoppedBroadcast(context, e.getMessage());
 		}
 	}
 
@@ -315,6 +360,7 @@ public class ServerManager extends Service {
 	public void onDestroy() {
 		super.onDestroy();
 		//showTextOnScreen("Droid VNC server service killed...");
+		unregisterVncReceiver();
 	}
 
 	static void writeCommand(OutputStream os, String command) throws Exception {
@@ -347,5 +393,84 @@ public class ServerManager extends Service {
 		ServerManager getService() {
 			return ServerManager.this;
 		}
+	}
+	
+	public static class VncBroadcastReceiver extends BroadcastReceiver {
+
+		@Override
+		public void onReceive(Context context, Intent intent) {
+
+			if (intent == null) {
+				Log.d(VncBroadcastReceiver.class.getSimpleName(),
+						"intent is null");
+				return;
+			}
+
+			if (!RemoteControlConstants.ACTION_REQUEST.equals(intent
+					.getAction())) {
+				Log.d(VncBroadcastReceiver.class.getSimpleName(),
+						"intent action is not: "
+								+ RemoteControlConstants.ACTION_REQUEST);
+				return;
+			}
+
+			Set<String> categories = intent.getCategories();
+			if (categories == null) {
+				Log.d(VncBroadcastReceiver.class.getSimpleName(),
+						"intent categories set is null");
+				return;
+			}
+
+			if (categories
+					.contains(RemoteControlConstants.CATEGORY_SERVER_STATUS)) {
+				sendServiceStatusBroadcast(context);
+			} else if (categories
+					.contains(RemoteControlConstants.CATEGORY_IP_ADDRESS)) {
+				sendIpAddressBroadcast(context);
+			} else if (categories.contains(RemoteControlConstants.CATEGORY_STOP_SERVER)) {
+				killServer(context);
+			} else {
+				Log.d(VncBroadcastReceiver.class.getSimpleName(),
+						"incompatible categories");
+			}
+		}
+
+		private void sendServiceStatusBroadcast(Context context) {
+			boolean isServerRunning = isServerRunning();
+			RemoteControlBroadcaster
+					.sendServiceStatusBroadcast(
+							context,
+							isServerRunning ? RemoteControlConstants.EXTRA_SERVICE_STATUS_RUNNING
+									: RemoteControlConstants.EXTRA_SERVICE_STATUS_NOT_RUNNING);
+		}
+
+		private void sendIpAddressBroadcast(Context context) {
+			String ipAddress = getIpAddress();
+			RemoteControlBroadcaster.sendServiceIpAddressBroadcast(context, ipAddress);
+		}
+	}
+	
+	public static String getIpAddress() {
+		try {
+			String ipv4;
+			for (Enumeration<NetworkInterface> en = NetworkInterface
+					.getNetworkInterfaces(); en.hasMoreElements();) {
+				NetworkInterface intf = en.nextElement();
+				for (Enumeration<InetAddress> enumIpAddr = intf
+						.getInetAddresses(); enumIpAddr.hasMoreElements();) {
+					InetAddress inetAddress = enumIpAddr.nextElement();
+					if (!inetAddress.isLoopbackAddress()) {
+						if (!inetAddress.isLoopbackAddress()
+								&& InetAddressUtils
+										.isIPv4Address(ipv4 = inetAddress
+												.getHostAddress()))
+							return ipv4;
+					}
+				}
+			}
+		} catch (SocketException ex) {
+			// TODO: do sth
+		}
+		return "";
 	}
 }

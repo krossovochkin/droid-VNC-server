@@ -5,9 +5,13 @@
     android:versionName="1.1RC0" >
 
     <uses-sdk android:minSdkVersion="5" />
+    
+    <permission android:name="com.permission.onaips.vnc.REMOTE_CONTROL" android:protectionLevel="dangerous"/>
 
     <uses-permission android:name="android.permission.WRITE_SETTINGS" >
     </uses-permission>
+    
+    <uses-permission android:name="com.permission.onaips.vnc.REMOTE_CONTROL" />    
  
     <application
         android:name="MainApplication"
@@ -52,6 +56,14 @@
 
         <service android:name="avncservice" >
         </service>
+        
+        <receiver android:name="org.onaips.vnc.RemoteControlReceiver"
+            android:permission="com.permission.onaips.vnc.REMOTE_CONTROL">
+            <intent-filter>
+                <action android:name="com.onaips.vnc.REQUEST"/>
+                <category android:name="category.vnc.START_SERVER"/>
+            </intent-filter>
+        </receiver>
     </application>
 
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" >

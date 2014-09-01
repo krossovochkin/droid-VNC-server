@@ -434,7 +434,7 @@ public class MainActivity extends Activity
 	}
 	public void stopServer()
 	{
-		s.killServer();
+		s.killServer(this);
 		Timer t=new Timer();
 		t.schedule(new TimerTask() {
 
