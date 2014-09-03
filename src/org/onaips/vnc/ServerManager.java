@@ -11,7 +11,14 @@ import java.net.SocketException;
 import java.util.Enumeration;
 import java.util.Set;
 
+import org.apache.http.HttpEntity;
+import org.apache.http.HttpResponse;
+import org.apache.http.client.HttpClient;
+import org.apache.http.client.methods.HttpGet;
 import org.apache.http.conn.util.InetAddressUtils;
+import org.apache.http.impl.client.DefaultHttpClient;
+import org.apache.http.util.EntityUtils;
+import org.json.JSONObject;
 
 import android.app.Notification;
 import android.app.NotificationManager;
@@ -86,8 +93,13 @@ public class ServerManager extends Service {
 	@Override
 	public int onStartCommand(Intent intent, int flags, int startId) {
 
-		boolean forceStartServer = intent.getBooleanExtra(
-				EXTRA_FORCE_START_SERVER_KEY, false);
+		boolean forceStartServer = false;
+		
+		if (intent != null) {
+			forceStartServer = intent.getBooleanExtra(
+					EXTRA_FORCE_START_SERVER_KEY, false);	
+		}		
+		 
 		handleStart(forceStartServer);
 		return START_NOT_STICKY;
 	}
@@ -444,13 +456,18 @@ public class ServerManager extends Service {
 									: RemoteControlConstants.EXTRA_SERVICE_STATUS_NOT_RUNNING);
 		}
 
-		private void sendIpAddressBroadcast(Context context) {
-			String ipAddress = getIpAddress();
-			RemoteControlBroadcaster.sendServiceIpAddressBroadcast(context, ipAddress);
+		private void sendIpAddressBroadcast(final Context context) {
+			Thread thread = new Thread(new Runnable() {				
+				public void run() {
+					String ipAddress = getExternalIpAddress();
+					RemoteControlBroadcaster.sendServiceIpAddressBroadcast(context, ipAddress);		
+				}
+			});
+			thread.start();
 		}
 	}
 	
-	public static String getIpAddress() {
+	public static String getLocalIpAddress() {
 		try {
 			String ipv4;
 			for (Enumeration<NetworkInterface> en = NetworkInterface
@@ -472,5 +489,26 @@ public class ServerManager extends Service {
 			// TODO: do sth
 		}
 		return "";
+	}
+	
+	public static String getExternalIpAddress() {
+		String ip;
+		try {
+			HttpClient httpclient = new DefaultHttpClient();
+			HttpGet httpget = new HttpGet(
+					"http://ip2country.sourceforge.net/ip2c.php?format=JSON");
+			HttpResponse response;
+
+			response = httpclient.execute(httpget);
+
+			HttpEntity entity = response.getEntity();
+			entity.getContentLength();
+			String str = EntityUtils.toString(entity);
+			JSONObject json_data = new JSONObject(str);
+			ip = json_data.getString("ip");
+			return ip;
+		} catch (Exception e) {
+			return "";
+		}
 	}
 }
