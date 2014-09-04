@@ -18,6 +18,7 @@ import org.apache.http.client.methods.HttpGet;
 import org.apache.http.conn.util.InetAddressUtils;
 import org.apache.http.impl.client.DefaultHttpClient;
 import org.apache.http.util.EntityUtils;
+import org.json.JSONException;
 import org.json.JSONObject;
 
 import android.app.Notification;
@@ -42,6 +43,13 @@ import android.widget.Toast;
 public class ServerManager extends Service {
 	
 	public static final String EXTRA_FORCE_START_SERVER_KEY = "force_start_server";
+	
+	public static final String KEY_PUBLIC_IP = "public_IP";
+	public static final String KEY_LOCAL_IP = "local_IP";
+	public static final String KEY_PORT = "port";
+	public static final String KEY_NOTE = "_Note:";
+	// TODO: move to strings.xml
+	public static final String FORWARD_INSTRUCTION = "You need to configure router to forward ";
 	
 	SharedPreferences preferences;
 	private static PowerManager.WakeLock wakeLock = null;
@@ -459,13 +467,29 @@ public class ServerManager extends Service {
 		private void sendIpAddressBroadcast(final Context context) {
 			Thread thread = new Thread(new Runnable() {				
 				public void run() {
-					String ipAddress = getExternalIpAddress();
-					RemoteControlBroadcaster.sendServiceIpAddressBroadcast(context, ipAddress);		
+					String ipExternalAddress = getExternalIpAddress();
+					String ipLocalAddress = getLocalIpAddress();
+					String port = getServerPort(context);
+					
+					JSONObject root = new JSONObject();
+					try {
+					root.put(KEY_PUBLIC_IP, ipExternalAddress);
+					root.put(KEY_LOCAL_IP, ipLocalAddress);
+					root.put(KEY_PORT, port);
+					root.put(KEY_NOTE,
+							FORWARD_INSTRUCTION
+									+ ipExternalAddress + ":" + port + " to "
+									+ ipLocalAddress + ":" + port);
+					} catch (JSONException e) {
+						Log.e(VncBroadcastReceiver.class.getSimpleName(), e.getMessage());
+					}
+					
+					RemoteControlBroadcaster.sendServiceIpAddressBroadcast(context, root.toString());		
 				}
 			});
 			thread.start();
 		}
-	}
+	}	
 	
 	public static String getLocalIpAddress() {
 		try {
@@ -510,5 +534,17 @@ public class ServerManager extends Service {
 		} catch (Exception e) {
 			return "";
 		}
+	}
+	
+	public static String getServerPort(Context context) {
+		SharedPreferences preferences = PreferenceManager.getDefaultSharedPreferences(context);
+		String port = preferences.getString("port", "5901");
+		try {
+			int port1 = Integer.parseInt(port);
+			port = String.valueOf(port1);
+		} catch (NumberFormatException e) {
+			port = "5901";
+		}
+		return port;
 	}
 }
